@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/url"
 	"runtime/debug"
@@ -21,16 +20,8 @@ import (
 	"github.com/eycorsican/go-tun2socks/proxy/socks"
 )
 
-const (
-	MTU = 1500
-)
-
-type Tun2socksCtl struct {
-	TunName string
-}
-
-type TunReadWriter interface {
-	io.ReadWriteCloser
+type TunWriter interface {
+	io.WriteCloser
 }
 
 func init() {
@@ -48,52 +39,18 @@ func init() {
 }
 
 // Tun2socksConnect reads packets from a TUN device and routes it to a socks5 server.
-// Returns an Tun2socksCtl instance.
+// Returns a Tunnel instance.
 //
-// `tunAddr` TUN address.
-// `tunWg` TUN Gateway address.
-// `tunMask` TUN Masking.
-// `tunDns` TUN DNS address.
+// `tunWriter` TUN Writer.
 // `socks5Proxy` socks5 proxy link.
 // `isUDPEnabled` indicates whether the tunnel and/or network enable UDP proxying.
 //
 // Sets an error if the tunnel fails to connect.
 
-func CreateTunConnect(tunAddr, tunWg, tunMask, tunDns, socks5Proxy string, isUDPEnabled bool) (*Tun2socksCtl, error) {
-	// Open the tun device.
-	if tunDns == "" {
-		tunDns = "8.8.8.8,8.8.4.4,1.1.1.1"
-	}
-
-	dnsServers := strings.Split(tunDns, ",")
-	utunName, tunDev, err := openTunDevice("utun0", tunAddr, tunWg, tunMask, dnsServers, false)
-	if err != nil {
-		return nil, errors.New(fmt.Sprintf("failed to open tun device: %v", err))
-	}
-
-	ctl, err := Connect(tunDev, socks5Proxy, isUDPEnabled)
-	if err != nil {
-		return nil, err
-	}
-
-	ctl.TunName = utunName
-
-	return ctl, nil
-}
-
-// Tun2socksConnect reads packets from a TUN device and routes it to a socks5 server.
-// Returns an Tun2socksCtl instance.
-//
-// `tunReadWriter` TUN ReadWriter.
-// `socks5Proxy` socks5 proxy link.
-// `isUDPEnabled` indicates whether the tunnel and/or network enable UDP proxying.
-//
-// Sets an error if the tunnel fails to connect.
-
-func Connect(tunReadWriter TunReadWriter, socks5Proxy string, isUDPEnabled bool) (*Tun2socksCtl, error) {
+func Connect(tunWriter TunWriter, socks5Proxy string, isUDPEnabled bool) (Tunnel, error) {
 
 	// Setup TCP/IP stack.
-	lwipWriter := core.NewLWIPStack().(io.Writer)
+	lwipWriter := core.NewLWIPStack()
 
 	// Register TCP and UDP handlers to handle accepted connections.
 	if !strings.Contains(socks5Proxy, "://") {
@@ -124,16 +81,8 @@ func Connect(tunReadWriter TunReadWriter, socks5Proxy string, isUDPEnabled bool)
 	// Register an output callback to write packets output from lwip stack to tun
 	// device, output function should be set before input any packets.
 	core.RegisterOutputFn(func(data []byte) (int, error) {
-		return tunReadWriter.Write(data)
+		return tunWriter.Write(data)
 	})
 
-	// Copy packets from tun device to lwip stack, it's the main loop.
-	go func() {
-		_, err := io.CopyBuffer(lwipWriter, tunReadWriter, make([]byte, MTU))
-		if err != nil {
-			log.Fatalf("copying data failed: %v", err)
-		}
-	}()
-
-	return &Tun2socksCtl{}, nil
+	return NewTunnel(tunWriter, lwipWriter), nil
 }
