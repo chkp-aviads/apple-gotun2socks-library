@@ -35,6 +35,17 @@ func isIPv6(ip net.IP) bool {
 	return false
 }
 
+func openTunInterface() (string, io.ReadWriteCloser, error) {
+	tunDev, err := water.New(water.Config{
+		DeviceType: water.TUN,
+	})
+	if err != nil {
+		return "", nil, err
+	}
+	name := tunDev.Name()
+	return name, tunDev, nil
+}
+
 func openTunDevice(name, addr, gw, mask string, dnsServers []string, persist bool) (string, io.ReadWriteCloser, error) {
 	tunDev, err := water.New(water.Config{
 		DeviceType: water.TUN,

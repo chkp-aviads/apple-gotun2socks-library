@@ -12,7 +12,6 @@ import (
 	"io"
 	"net"
 	"net/url"
-	"runtime/debug"
 	"strings"
 	"time"
 
@@ -24,31 +23,22 @@ type TunWriter interface {
 	io.WriteCloser
 }
 
-func init() {
-	// Apple VPN extensions have a memory limit of 15MB. Conserve memory by increasing garbage
-	// collection frequency and returning memory to the OS every minute.
-	debug.SetGCPercent(10)
-	// TODO: Check if this is still needed in go 1.13, which returns memory to the OS
-	// automatically.
-	ticker := time.NewTicker(time.Minute * 1)
-	go func() {
-		for range ticker.C {
-			debug.FreeOSMemory()
-		}
-	}()
-}
-
-// Tun2socksConnect reads packets from a TUN device and routes it to a socks5 server.
-// Returns a Tunnel instance.
-//
-// `tunWriter` TUN Writer.
-// `socks5Proxy` socks5 proxy link.
-// `isUDPEnabled` indicates whether the tunnel and/or network enable UDP proxying.
-//
-// Sets an error if the tunnel fails to connect.
+// I disable it as it is included in another module
+// func init() {
+// 	// Apple VPN extensions have a memory limit of 15MB. Conserve memory by increasing garbage
+// 	// collection frequency and returning memory to the OS every minute.
+// 	debug.SetGCPercent(10)
+// 	// TODO: Check if this is still needed in go 1.13, which returns memory to the OS
+// 	// automatically.
+// 	ticker := time.NewTicker(time.Minute * 1)
+// 	go func() {
+// 		for range ticker.C {
+// 			debug.FreeOSMemory()
+// 		}
+// 	}()
+// }
 
 func Connect(tunWriter TunWriter, socks5Proxy string, isUDPEnabled bool) (Tunnel, error) {
-
 	// Setup TCP/IP stack.
 	lwipWriter := core.NewLWIPStack()
 
