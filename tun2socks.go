@@ -7,39 +7,74 @@
 package tun2socks
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/eycorsican/go-tun2socks/core"
 	"github.com/eycorsican/go-tun2socks/proxy/socks"
+	"golang.org/x/sys/unix"
+	"golang.zx2c4.com/wireguard/device"
 )
 
-type TunWriter interface {
-	io.WriteCloser
+const (
+	MTU = 1500
+)
+
+// Connect establishes a connection between a TUN device and a SOCKS5 proxy server.
+//
+// Parameters:
+//   - tunFd: File descriptor of the TUN device to be opened.
+//   - socks5Proxy: Address of the SOCKS5 proxy server (e.g., "127.0.0.1:1080").
+//   - isUDPEnabled: Boolean flag indicating whether UDP traffic should be enabled.
+//   - logger: Logger instance for logging messages and errors.
+//
+// Returns:
+//   - Tunnel: An interface representing the established tunnel.
+//   - error: An error object if the connection fails, otherwise nil.
+//
+// This function opens the TUN device using the provided file descriptor, logs the
+// operation, and connects the TUN device to the specified SOCKS5 proxy server.
+// If the operation fails at any step, an error is returned.
+func Connect(tunFd int32, socks5Proxy string, isUDPEnabled bool, logger *device.Logger) (Tunnel, error) {
+	// Open TUN device.
+	tunDev, err := openTunInterfaceByFd(tunFd, logger)
+	if err != nil {
+		logger.Errorf("Failed to open TUN device: %v", err)
+		return nil, err
+	}
+
+	logger.Verbosef("TUN device opened: %s", tunDev)
+	return connectDevice(tunDev, socks5Proxy, isUDPEnabled, logger)
 }
 
-// I disable it as it is included in another module
-// func init() {
-// 	// Apple VPN extensions have a memory limit of 15MB. Conserve memory by increasing garbage
-// 	// collection frequency and returning memory to the OS every minute.
-// 	debug.SetGCPercent(10)
-// 	// TODO: Check if this is still needed in go 1.13, which returns memory to the OS
-// 	// automatically.
-// 	ticker := time.NewTicker(time.Minute * 1)
-// 	go func() {
-// 		for range ticker.C {
-// 			debug.FreeOSMemory()
-// 		}
-// 	}()
-// }
+func openTunInterfaceByFd(tunFd int32, logger *device.Logger) (io.ReadWriteCloser, error) {
+	dupTunFd, err := unix.Dup(int(tunFd))
+	if err != nil {
+		logger.Errorf("Unable to dup tun fd: %v", err)
+		return nil, err
+	}
 
-func Connect(tunWriter TunWriter, socks5Proxy string, isUDPEnabled bool) (Tunnel, error) {
+	err = unix.SetNonblock(dupTunFd, true)
+	if err != nil {
+		logger.Errorf("Unable to set tun fd as non blocking: %v", err)
+		unix.Close(dupTunFd)
+		return nil, err
+	}
+
+	file := os.NewFile(uintptr(dupTunFd), "/dev/tun")
+	return &tunReadCloser{
+		f: file,
+	}, nil
+}
+
+func connectDevice(tunDev io.ReadWriteCloser, socks5Proxy string, isUDPEnabled bool, logger *device.Logger) (Tunnel, error) {
 	// Setup TCP/IP stack.
+	logger.Verbosef("Setting up TCP/IP stack")
 	lwipWriter := core.NewLWIPStack()
 
 	// Register TCP and UDP handlers to handle accepted connections.
@@ -58,7 +93,7 @@ func Connect(tunWriter TunWriter, socks5Proxy string, isUDPEnabled bool) (Tunnel
 
 	proxyAddr, err := net.ResolveTCPAddr("tcp", address)
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("invalid proxy server address: %v", err))
+		return nil, fmt.Errorf("invalid proxy server address: %v", err)
 	}
 	proxyHost := proxyAddr.IP.String()
 	proxyPort := uint16(proxyAddr.Port)
@@ -70,9 +105,26 @@ func Connect(tunWriter TunWriter, socks5Proxy string, isUDPEnabled bool) (Tunnel
 
 	// Register an output callback to write packets output from lwip stack to tun
 	// device, output function should be set before input any packets.
-	core.RegisterOutputFn(func(data []byte) (int, error) {
-		return tunWriter.Write(data)
+	core.RegisterOutputFn(func(buf []byte) (int, error) {
+		// Write the packet to the TUN device
+		logger.Verbosef("Writing packet to TUN device")
+		n, err := tunDev.Write(buf)
+		logger.Verbosef("Wrote %d bytes to TUN device", n)
+		if err != nil {
+			logger.Errorf("Failed to write to TUN device: %v", err)
+			return 0, fmt.Errorf("failed to write to TUN device: %w", err)
+		}
+		return n, nil
 	})
 
-	return NewTunnel(tunWriter, lwipWriter), nil
+	// Copy packets from tun device to lwip stack, it's the main loop.
+	go func() {
+		// logger.Verbosef("Copying packets from TUN device to lwip stack")
+		_, err := io.CopyBuffer(lwipWriter, tunDev, make([]byte, MTU))
+		if err != nil {
+			logger.Errorf("Failed to copy data from TUN device to lwip stack: %v", err)
+		}
+	}()
+
+	return NewTunnel(tunDev, lwipWriter), nil
 }

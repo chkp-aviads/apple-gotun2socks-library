@@ -32,7 +32,7 @@ type Tunnel interface {
 }
 
 type tunnel struct {
-	tunWriter   io.WriteCloser
+	tunDevice   io.ReadWriteCloser
 	lwipStack   core.LWIPStack
 	isConnected bool
 }
@@ -47,16 +47,16 @@ func (t *tunnel) Disconnect() {
 	}
 	t.isConnected = false
 	t.lwipStack.Close()
-	t.tunWriter.Close()
+	t.tunDevice.Close()
 }
 
 func (t *tunnel) Write(data []byte) (int, error) {
 	if !t.isConnected {
-		return 0, errors.New("Failed to write, network stack closed")
+		return 0, errors.New("failed to write, network stack closed")
 	}
 	return t.lwipStack.Write(data)
 }
 
-func NewTunnel(tunWriter io.WriteCloser, lwipStack core.LWIPStack) Tunnel {
-	return &tunnel{tunWriter, lwipStack, true}
+func NewTunnel(tunDevice io.ReadWriteCloser, lwipStack core.LWIPStack) Tunnel {
+	return &tunnel{tunDevice, lwipStack, true}
 }
