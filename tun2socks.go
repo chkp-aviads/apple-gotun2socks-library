@@ -107,9 +107,9 @@ func connectDevice(tunDev io.ReadWriteCloser, socks5Proxy string, isUDPEnabled b
 	// device, output function should be set before input any packets.
 	core.RegisterOutputFn(func(buf []byte) (int, error) {
 		// Write the packet to the TUN device
-		logger.Verbosef("Writing packet to TUN device")
+		// logger.Verbosef("Writing packet to TUN device")
 		n, err := tunDev.Write(buf)
-		logger.Verbosef("Wrote %d bytes to TUN device", n)
+		// logger.Verbosef("Wrote %d bytes to TUN device", n)
 		if err != nil {
 			logger.Errorf("Failed to write to TUN device: %v", err)
 			return 0, fmt.Errorf("failed to write to TUN device: %w", err)
